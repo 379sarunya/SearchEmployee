@@ -2,55 +2,167 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Employee;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
+
 
 class EmployeeController extends Controller
 {
-    public function index(Request $request) 
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(Request $request)
     {
-        $query = $request->input('search'); // รับค่า search ที่ส่งมาจากหน้า index และเก็บไว้ในตัวแปร query
-
-        $employees = DB::table('employees') // ดึงข้อมูลจากตาราง employees ในฐานข้อมูล
-        ->where('first_name', 'like', '%' . $query . '%')
-        ->orWhere('last_name', 'like', '%' . $query . '%') // ใช้ orWhere ใช้เมื่อเราต้องการให้เงื่อนไขการค้นหามีหลายตัวเลือกที่เชื่อมโยงกันด้วย OR
-        ->paginate(10);// ใช้ paginate แบ่งหน้าผลลัพธ์ แสดงผลแค่ 10 รายการต่อหน้า
-
-        return Inertia::render('Employee/index', [ //ส่งข้อมูลไปที่หน้า index 
-            'employees' => $employees,//ข้อมูลพนักงานทั้งหมด
-            'query' => $query, //ข้อมูลที่พิมพ์เข้าไปเราต้องการให้ค้างอยู่ในช่องค้นหา
+        // รับค่าค้นหาและการเรียงลำดับจาก request
+        $query = $request->input('search');
+        $sortColumn = $request->input('sortColumn', 'emp_no');  // เริ่มต้นที่ emp_no
+        $sortDirection = $request->input('sortDirection', 'asc');  // เริ่มต้นที่ ascending
+    
+        $employees = DB::table('employees')
+            ->where('first_name', 'like', '%' . $query . '%')
+            ->orWhere('last_name', 'like', '%' . $query . '%')
+            ->orWhere('emp_no', '=', $query)
+            ->orderBy($sortColumn, $sortDirection)  // ใช้ค่าจาก request เพื่อการจัดเรียง
+            ->paginate(10)
+            ->appends(['search' => $query, 'sortColumn' => $sortColumn, 'sortDirection' => $sortDirection]); // แนบค่าการค้นหาและการเรียงลำดับใน URL
+    
+        return Inertia::render('Employee/Index', [
+            'employees' => $employees,
+            'query' => $query,
+            'sortColumn' => $sortColumn,
+            'sortDirection' => $sortDirection,
         ]);
     }
+    
+    
 
+    /**
+     * Show the form for creating a new resource.
+     */
     public function create()
     {
-        //
+        // ดึงรายชื่อแผนกจากฐานข้อมูล เพื่อไปแสดงให้เลือกรายการในแบบฟอร์ม
+        // $departments = DB::table('departments')->select('dept_no', 'dept_name')->get();
+        $departments = DB::table('departments')->get();
+
+        // ส่งข้อมูลไปยังหน้า Inertia
+        return inertia('Employee/Create', ['departments' => $departments,]);
+
     }
 
+    /**
+     * Store a newly created resource in storage.
+     */
     public function store(Request $request)
+        {
+            // show all input data
+            log::info($request->all());
+        
+            // ตรวจสอบข้อมูลที่ส่งมาจากฟอร์ม 
+            $validator = Validator::make($request->all(), [ 
+                'first_name' => 'required|string|max:14',
+                'last_name' => 'required|string|max:16',
+                'birth_date' => 'required|date',
+                'gender' => 'required|string|max:1',
+                'hire_date' => 'required|date',
+                'dept_no' => 'required|string|max:4',
+                'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:2048',
+            ]);
+        
+            if ($validator->fails()) {
+                //log::info('Validation Error:', $validator->errors()->toArray());
+                return redirect()->route('employee.create')
+                    ->withInput()
+                    ->withErrors($validator) // ใช้สำหรับ Validation Errors
+                    ->with('error', 'Failed to create employee. Please try again.');
+            }
+        
+            // ดึงเฉพาะข้อมูลที่ผ่านการตรวจสอบแล้ว
+            $validated = $request->only([
+                'first_name',
+                'last_name',
+                'birth_date',
+                'gender',
+                'hire_date',
+                'dept_no',
+            ]);
+        
+            try {
+                DB::transaction(function () use ($validated, $request) {
+                    // 2. หาค่า emp_no ล่าสุด
+                    $latestEmpNo = DB::table('employees')->max('emp_no') ?? 0; // ถ้าไม่มีข้อมูล ให้เริ่มที่ 0
+                    $newEmpno = $latestEmpNo + 1; // ค่าล่าสุด +1
+        
+                    // 3. เพิ่มข้อมูลลงในตาราง employees
+                    $employeeData = [
+                        'emp_no' => $newEmpno,
+                        'first_name' => $validated['first_name'],
+                        'last_name' => $validated['last_name'],
+                        'birth_date' => $validated['birth_date'],
+                        'gender' => $validated['gender'],
+                        'hire_date' => $validated['hire_date'],
+                    ];
+        
+                    // จัดการการอัปโหลดรูปภาพ
+                    if ($request->hasFile('photo')) {
+                        $path = $request->file('photo')->store('photos', 'public');
+                        $employeeData['photo'] = $path;
+                    }
+                    DB::table('employees')->insert($employeeData); // บันทึกลงใน employees
+        
+                    // 4. เพิ่มข้อมูลลงในตาราง dept_emp
+                    DB::table('dept_emp')->insert([
+                        'emp_no' => $newEmpno,
+                        'dept_no' => $validated['dept_no'],
+                        'from_date' => $validated['hire_date'],
+                        'to_date' => '9999-01-01',
+                    ]);
+                });
+        
+                // ถ้าการทำงานทุกอย่างสำเร็จ ให้ไปที่หน้า employee.index โดยกำหนดค่าข้อความ success
+                session()->flash('success', 'Employee created successfully!');
+                return redirect()->route('employee.index');
+        
+            } catch (\Exception $e) {
+                // ถ้าการทำงานผิดพลาดกรณีฐานข้อมูลล้มเหลว ให้กลับไปหน้าเดิม 
+                return redirect()->route('employee.create');
+                    
+            }
+        }
+        
+
+    /**
+     * Display the specified resource.
+     */
+    public function show(string $id)
     {
         //
     }
 
-    public function show(Employee $employee)
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(string $id)
     {
         //
     }
 
-    public function edit(Employee $employee)
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(Request $request, string $id)
     {
         //
     }
 
-    public function update(Request $request, Employee $employee)
-    {
-        //
-    }
-
-    public function destroy(Employee $employee)
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(string $id)
     {
         //
     }

@@ -6,7 +6,16 @@ use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use App\Http\Controllers\EmployeeController;
 
-Route::get('/employees',[EmployeeController::class,'index']);
+Route::get('/employee', [EmployeeController::class, 'index'])
+->name('employee.index');
+
+// หน้าแบบฟอร์มสำหรับเพิ่มข้อมูลพนักงาน
+Route::get('/employee/create', [EmployeeController::class, 'create'])
+->name('employee.create');
+
+// Function สำหรับบันทึกข้อมูลพนักงาน
+Route::post('/employee', [EmployeeController::class, 'store']) 
+->name('employee.store');
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [
@@ -17,16 +26,17 @@ Route::get('/', function () {
     ]);
 });
 
-Route::get('/employee', [EmployeeController::class, 'index']);
-
+// เส้นทางสำหรับหน้า Dashboard
 Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
+// เส้นทางที่ต้องใช้การยืนยันตัวตน
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
 
+// รวมเส้นทางที่เกี่ยวกับการยืนยันตัวตน
 require __DIR__.'/auth.php';
